@@ -1,8 +1,7 @@
 import os
 import time
-from dataclasses import dataclass
-from threading import Thread, Lock
-from typing import List, Optional, Dict
+from threading import Thread
+from typing import List, Optional
 
 from slack_bolt import App
 
