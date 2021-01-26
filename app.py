@@ -4,6 +4,7 @@ from threading import Thread
 from typing import List, Optional
 
 from slack_bolt import App
+from slack_sdk.errors import SlackApiError
 
 from utils import GroupsAndUsersThreadSafeDict, User, Group, user_dict_to_user, group_dict_to_group, \
     get_team_name_from_msg
@@ -20,6 +21,13 @@ ALL_ACTIVE_USERS = 'ALL_ACTIVE_USERS'
 CHECKBOXES_LIMIT = 10
 groups_dict = GroupsAndUsersThreadSafeDict()
 
+# TODO: improvements
+# - \n i inne białe znaki kończą parsowanie nazwy grupy (nazwa grupy musi być \w+)
+# - notify all nie powinno notifikować wywołującego
+# - @ActiveUsers coreteam powinno z defaultu pingować wszystkich, można dorobić
+#   @ActiveUsers coreteam show które wyświetli aktywnych z opcją wyboru, ale to powinna być wiadomość
+#   widoczna tylko dla wywołującego polecenie!
+
 
 class RefreshStatusThread(Thread):
     def __init__(self, groups_users_dict: GroupsAndUsersThreadSafeDict, refresh_seconds=120, sleep_time=3):
@@ -35,8 +43,11 @@ class RefreshStatusThread(Thread):
         self._stop_requested = True
 
     def refresh_groups_and_users_info(self):
-        groups = app.client.usergroups_list(include_users=True)['usergroups']
-        users = app.client.users_list()['members']
+        try:
+            groups = app.client.usergroups_list(include_users=True)['usergroups']
+            users = app.client.users_list()['members']
+        except SlackApiError:
+            return
         user_id_to_user = {}
         users_in_groups_ids = set()
         for user_dict in users:
@@ -57,7 +68,10 @@ class RefreshStatusThread(Thread):
             group_handle_to_group[group.handle] = group
 
         for user_id in users_in_groups_ids:
-            presence = app.client.users_getPresence(user=user_id)['presence']
+            try:
+                presence = app.client.users_getPresence(user=user_id)['presence']
+            except SlackApiError:
+                continue
             if presence == 'active':
                 user = user_id_to_user.get(user_id)
                 if user is None:
