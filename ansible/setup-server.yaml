@@ -1,0 +1,127 @@
+---
+# How to execute this playbook:
+# - check content of ansible/hosts file
+# - ansible-playbook REPO_DIR/ansible/setup-server.yaml -i ./ansible/hosts
+# Above will work assuming that you have correct key as default key 'id_rsa'
+# add --private-key ~/.ssh/your_key.pem to use different ssh key.
+- hosts: reviewraccoon
+  vars_prompt:
+  - name: git_repo_password
+    prompt: "Enter your git repository password"
+    private: yes
+  vars:
+    activeusers_home: "/home/activeusers"
+    activeusers_bin: "{{ activeusers_home }}/bin"
+    activeusers_repo: "{{ activeusers_home }}/activeusers_repo"
+    activeusers_venv: "{{ activeusers_home }}/.virtualenvs/activeusers_venv"
+    activeusers_log: "{{ activeusers_home }}/log"
+
+  become: true
+  become_user: root
+  become_method: sudo
+  gather_facts: no
+  pre_tasks:
+    - name: Install python2  # required by ansible, need to use 'raw' because other ansible commands do not work without python 2
+      raw: sudo apt-get -y install python-simplejson
+
+  tasks:
+  - name: Add webapps group
+    group:
+      name: webapps
+      state: present
+  - name: Create activeusers user
+    user:
+      name: activeusers
+      password: 'activeusers'
+      groups:
+        - webapps
+        - sudo
+      state: present
+      shell: /bin/bash
+      system: no
+      createhome: yes
+      home: "{{ activeusers_home }}"
+  - name: Allow 'activeusers' user to have passwordless sudo
+    lineinfile:
+      dest: /etc/sudoers.d/activeusers
+      state: present
+      create: yes
+      regexp: '^%activeusers'
+      line: '%activeusers ALL=(ALL) NOPASSWD: ALL'
+      validate: 'visudo -cf %s'
+
+  - name: install pip, virtualenv, virtualenvwrapper
+    apt:
+      name:
+      - python-pip
+      - virtualenv
+      - virtualenvwrapper
+      state: present
+
+  - block:
+
+    - name: checkout git repo
+      git:
+        repo: "https://albrycht:{{ git_repo_password | urlencode }}@github.com/albrycht/activeusers.git"
+        dest: "{{ activeusers_repo }}"
+        version: master
+      become_user: activeusers
+
+    - name: Install python prerequisites
+      apt: name=software-properties-common state=present
+      become: true
+
+    - name: Add deadsnakes repo
+      apt_repository: repo="ppa:deadsnakes/ppa"
+      become: true
+
+    - name: Install python
+      apt: name="python3.8" state=present
+      become: true
+
+    - name: Install python-distutils
+      apt: name="python3.8-distutils" state=present
+      become: true
+
+    - name: Install requirements
+      pip:
+        requirements: "{{ activeusers_repo }}/requirements.txt"
+        virtualenv: "{{ activeusers_venv }}"
+        virtualenv_python: python3.8
+      become_user: activeusers
+
+    - name: Ensure bin folder
+      file:
+        path: '{{ activeusers_bin }}'
+        state: directory
+        mode: 0750
+      become_user: activeusers
+
+    - name: Ensure log folder
+      file:
+        path: '{{ activeusers_log }}'
+        state: directory
+        mode: 0750
+      become_user: activeusers
+
+#    - name: copy start.sh file to bin folder
+#      copy:
+#        src: "{{ activeusers_repo }}/start.sh"
+#        dest: "{{ activeusers_bin }}/"
+#        remote_src: yes
+
+#    - name: Set proper project paths in gunicorn_start.sh and make it executable
+#      lineinfile:
+#        dest: "{{ activeusers_bin }}/start.sh"
+#        state: present
+#        regexp: '{{ item.regexp }}'
+#        line: '{{ item.line }}'
+#        mode: 0750
+#        owner: activeusers
+#
+#      with_items:
+#        - { regexp: '^SERVER_APP_DIR=', line: 'SERVER_APP_DIR={{ activeusers_repo }}' }
+#        - { regexp: '^VENV_PATH=', line: 'VENV_PATH={{ activeusers_venv }}' }
+
+  - include_tasks: setup-nginx.yaml
+    tags: nginx

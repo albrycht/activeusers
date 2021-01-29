@@ -1,0 +1,2 @@
+[web]
+reviewraccoon ansible_host=reviewraccoon.com ansible_user=root

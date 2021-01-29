@@ -1,0 +1,35 @@
+- block:
+
+  - name: install nginx
+    apt:
+      name: nginx
+      state: latest
+      update_cache: yes
+
+  - name: save nginx config for activeusers.reviewraccoon.com
+    template:
+      src: templates/nginx_config.j2
+      dest: /etc/nginx/sites-available/activeusers.reviewraccoon.com.conf
+    vars:
+      domain: activeusers.reviewraccoon.com
+
+  - name: Create symlink to enable nginx config movedetector.pl
+    file:
+      src: /etc/nginx/sites-available/activeusers.reviewraccoon.com.conf
+      dest: /etc/nginx/sites-enabled/activeusers.reviewraccoon.com.conf
+      state: link
+
+  - name: Create symlink to nginx access log
+    file:
+      src: /var/log/nginx/access.log
+      dest: "{{ activeusers_log }}/nginx_access.log"
+      state: link
+
+  - name: Create symlink to nginx error log
+    file:
+      src: /var/log/nginx/error.log
+      dest: "{{ activeusers_log }}/nginx_error.log"
+      state: link
+
+  - name: reload nginx
+    service: name=nginx state=reloaded

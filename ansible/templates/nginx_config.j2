@@ -1,0 +1,10 @@
+server {
+    server_name {{ domain }};
+
+    listen 80;
+
+    location / {
+        proxy_pass  http://localhost:3000;
+    }
+
+}
