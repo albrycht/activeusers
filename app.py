@@ -2,6 +2,7 @@ import os
 import time
 from threading import Thread
 from typing import List, Optional
+from urllib.error import URLError
 
 from slack_bolt import App
 from slack_sdk.errors import SlackApiError
@@ -46,7 +47,7 @@ class RefreshStatusThread(Thread):
         try:
             groups = app.client.usergroups_list(include_users=True)['usergroups']
             users = app.client.users_list()['members']
-        except SlackApiError:
+        except (SlackApiError, URLError):
             return
         user_id_to_user = {}
         users_in_groups_ids = set()
@@ -70,7 +71,7 @@ class RefreshStatusThread(Thread):
         for user_id in users_in_groups_ids:
             try:
                 presence = app.client.users_getPresence(user=user_id)['presence']
-            except SlackApiError:
+            except (SlackApiError, URLError):
                 continue
             if presence == 'active':
                 user = user_id_to_user.get(user_id)
