@@ -113,7 +113,7 @@ def message_hello(event, say):
     bot_user = groups_dict.bot_user
     if bot_user is None:
         return
-    team_id = event['team']  # TODO use team_id?
+    #team_id = event['team']  # TODO use team_id?
     text: str = event['text']
     assert bot_user.id in text
     required_group = get_team_name_from_msg(text, bot_user.id)
