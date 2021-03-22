@@ -1,4 +1,6 @@
 import os
+import signal
+import socket
 import time
 from threading import Thread
 from typing import List, Optional
@@ -9,6 +11,15 @@ from slack_sdk.errors import SlackApiError
 
 from utils import GroupsAndUsersThreadSafeDict, User, Group, user_dict_to_user, group_dict_to_group, \
     get_team_name_from_msg
+
+STOP_REQUESTED = False
+
+def sigint_handler(signum, frame):
+    print("STOP REQUESTED!")
+    global STOP_REQUESTED
+    STOP_REQUESTED = True
+
+signal.signal(signal.SIGINT, sigint_handler)
 
 ALL_A = "ALL_ACTIVE_USERS"
 
@@ -47,7 +58,7 @@ class RefreshStatusThread(Thread):
         try:
             groups = app.client.usergroups_list(include_users=True)['usergroups']
             users = app.client.users_list()['members']
-        except (SlackApiError, URLError):
+        except (SlackApiError, URLError, socket.timeout, socket.error):
             return
         user_id_to_user = {}
         users_in_groups_ids = set()
@@ -70,8 +81,11 @@ class RefreshStatusThread(Thread):
 
         for user_id in users_in_groups_ids:
             try:
+                if STOP_REQUESTED:
+                    self._stop_requested = True
+                    return
                 presence = app.client.users_getPresence(user=user_id)['presence']
-            except (SlackApiError, URLError):
+            except (SlackApiError, URLError, socket.timeout, socket.error):
                 continue
             if presence == 'active':
                 user = user_id_to_user.get(user_id)
