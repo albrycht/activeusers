@@ -1,6 +1,7 @@
 import os
 import socket
 import time
+from http.client import HTTPException
 from threading import Thread
 from typing import List, Optional
 from urllib.error import URLError
@@ -48,7 +49,7 @@ class RefreshStatusThread(Thread):
         try:
             groups = app.client.usergroups_list(include_users=True)['usergroups']
             users = app.client.users_list()['members']
-        except (SlackApiError, URLError, socket.timeout, socket.error):
+        except (SlackApiError, URLError, socket.timeout, socket.error, HTTPException):
             return
         user_id_to_user = {}
         users_in_groups_ids = set()
@@ -72,7 +73,7 @@ class RefreshStatusThread(Thread):
         for user_id in users_in_groups_ids:
             try:
                 presence = app.client.users_getPresence(user=user_id)['presence']
-            except (SlackApiError, URLError, socket.timeout, socket.error):
+            except (SlackApiError, URLError, socket.timeout, socket.error, HTTPException):
                 continue
             if presence == 'active':
                 user = user_id_to_user.get(user_id)
