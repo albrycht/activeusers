@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from threading import Lock
 from typing import List, Dict, Optional
@@ -35,25 +36,29 @@ def group_dict_to_group(group_dict) -> Group:
     return Group(id, handle, user_ids)
 
 
-def get_team_name_from_msg(text: str, bot_id:str) -> Optional[str]:
-    """
-    >>> get_team_name_from_msg("some message <@ABC123> coreteam asdlkj asldaskj", bot_id="ABC123")
-    'coreteam'
-    >>> get_team_name_from_msg("<@ABC123> coreteam asdlkj asldaskj", bot_id="ABC123")
-    'coreteam'
-    >>> get_team_name_from_msg("<@ABC123> coreteam", bot_id="ABC123")
-    'coreteam'
-    >>> get_team_name_from_msg("<@ABC123>     coreteam", bot_id="ABC123")
-    'coreteam'
-    >>> get_team_name_from_msg("<@ABC123>", bot_id="ABC123") is None
-    True
+def get_group_name_from_msg(text: str, bot_id: str) -> List[str]:
+    r"""
+    >>> get_group_name_from_msg("some message <@ABC123> coreteam asdlkj asldaskj", bot_id="ABC123")
+    ['coreteam']
+    >>> get_group_name_from_msg("<@ABC123> coreteam asdlkj asldaskj", bot_id="ABC123")
+    ['coreteam']
+    >>> get_group_name_from_msg("<@ABC123> coreteam", bot_id="ABC123")
+    ['coreteam']
+    >>> get_group_name_from_msg("<@ABC123>     coreteam", bot_id="ABC123")
+    ['coreteam']
+    >>> get_group_name_from_msg("<@ABC123>", bot_id="ABC123")
+    []
+    >>> get_group_name_from_msg("some msg \nasdlkj<@ABC123> coreteam asdasdasd", bot_id="ABC123")
+    ['coreteam']
+    >>> get_group_name_from_msg("<@ABC123> coreteam <@ABC123> guiteam", bot_id="ABC123")
+    ['coreteam', 'guiteam']
     """
     id_str = f"<@{bot_id}>"
     assert id_str in text
-    team = text.split(id_str)[1].strip().split(' ', 1)[0]
-    if team == '':
-        return None
-    return team
+    groups = []
+    for match in re.finditer(re.escape(id_str) + r"\s+(\w+)", text):
+        groups.append(match.group(1))
+    return groups
 
 
 class GroupsAndUsersThreadSafeDict:
@@ -76,16 +81,21 @@ class GroupsAndUsersThreadSafeDict:
     def set_bot_user(self, user: User):
         self.bot_user = user
 
-    def get_group_and_users(self, group_name):
+    def get_groups_and_users(self, group_names):
+        user_ids = set()
+        groups = []
         users = []
         with self._lock:
-            group = self._group_handle_to_group[group_name]
-            for user_id in group.user_ids:
+            for group_name in group_names:
+                group = self._group_handle_to_group[group_name]
+                user_ids.update(group.user_ids)
+                groups.append(group)
+            for user_id in user_ids:
                 user = self._user_id_to_user.get(user_id)
                 if user_id is None:
                     continue
                 users.append(user)
-        return group, users
+        return groups, users
 
     def get_groups_handles(self):
         with self._lock:

@@ -3,16 +3,14 @@ import socket
 import time
 from http.client import HTTPException
 from threading import Thread
-from typing import List, Optional
+from typing import List
 from urllib.error import URLError
 
 from slack_bolt import App
 from slack_sdk.errors import SlackApiError
 
 from utils import GroupsAndUsersThreadSafeDict, User, Group, user_dict_to_user, group_dict_to_group, \
-    get_team_name_from_msg
-
-ALL_A = "ALL_ACTIVE_USERS"
+    get_group_name_from_msg
 
 app = App(
     token=os.environ.get("SLACK_BOT_TOKEN"),
@@ -20,16 +18,14 @@ app = App(
 )
 
 BOT_NAME = 'ActiveUsers'
-ALL_ACTIVE_USERS = 'ALL_ACTIVE_USERS'
-CHECKBOXES_LIMIT = 10
 groups_dict = GroupsAndUsersThreadSafeDict()
 
-# TODO: improvements
-# - \n i inne białe znaki kończą parsowanie nazwy grupy (nazwa grupy musi być \w+)
-# - notify all nie powinno notifikować wywołującego
-# - @ActiveUsers coreteam powinno z defaultu pingować wszystkich, można dorobić
-#   @ActiveUsers coreteam show które wyświetli aktywnych z opcją wyboru, ale to powinna być wiadomość
-#   widoczna tylko dla wywołującego polecenie!
+# To test locally run this tunnel:
+# ssh -R 3000:localhost:3000 root@reviewraccoon.com
+# but first kill working instance on server
+
+# TODO
+# Store activeness in DB and draw a graph
 
 
 class RefreshStatusThread(Thread):
@@ -94,6 +90,22 @@ class RefreshStatusThread(Thread):
             time.sleep(self.sleep_time)
 
 
+STARFISH_ALIASES = {
+    'core': 'coreteam',
+    'gui': 'guiteam',
+}
+
+STARFISH_TEAM_ID = "T04QW7B6D"
+
+
+def _groups_str(names):
+    if not names:
+        return None
+    if len(names) == 1:
+        return names[0]
+    return ', '.join(names[:-1]) + ' and ' + names[-1]
+
+
 @app.event("app_mention")
 def message_hello(event, say):
     if event is None:
@@ -101,25 +113,33 @@ def message_hello(event, say):
     bot_user = groups_dict.bot_user
     if bot_user is None:
         return
-    #team_id = event['team']  # TODO use team_id?
+    team_id = event.get('team')
     text: str = event['text']
     assert bot_user.id in text
-    required_group = get_team_name_from_msg(text, bot_user.id)
+    required_groups = get_group_name_from_msg(text, bot_user.id)
+    if team_id == STARFISH_TEAM_ID:
+        for alias, original in STARFISH_ALIASES.items():
+            if alias in required_groups:
+                required_groups.remove(alias)
+                required_groups.append(original)
 
     error_msg = None
-    group: Optional[Group] = None
-    users: Optional[List[User]] = None
-    if not required_group:
+    groups: List[Group]
+    users: List[User]
+    if not required_groups:
         error_msg = "You need to type name of the group!"
     else:
         try:
-            group, users = groups_dict.get_group_and_users(required_group)
+            groups, users = groups_dict.get_groups_and_users(required_groups)
             active_users = [user for user in users if user.active]
             if not active_users:
-                error_msg = f"There are no active users in group {required_group}"
-        except KeyError:
+                if len(required_groups) == 1:
+                    error_msg = f"There are no active users in group {required_groups[0]}."
+                else:
+                    error_msg = f"There are no active users in groups {_groups_str(required_groups)}."
+        except KeyError as e:
             available_groups = ', '.join(groups_dict.get_groups_handles())
-            error_msg = f"Can't recognise group {required_group}. Available groups: {available_groups}"
+            error_msg = f"Can't recognise group {e.args[0]}. Available groups: {available_groups}"
 
     if error_msg:
         say(
@@ -128,96 +148,16 @@ def message_hello(event, say):
         )
 
     else:
-        def _get_checkbox_dict(text, user_id):
-            return {
-                "text": {
-                    "type": "mrkdwn",
-                    "text": text
-                },
-                "value": f"{group.handle} {user_id}"
-            }
+        requesting_user_id = event['user']
+        user_ids = [f"<@{user.id}>" for user in users if user.active and user.id != requesting_user_id]
+        user_ids_str = ', '.join(user_ids)
 
-        checkboxes = [_get_checkbox_dict(text="All active users", user_id=ALL_ACTIVE_USERS)]
-        for user in users:
-            if user.active:
-                checkboxes.append(_get_checkbox_dict(text=user.real_name, user_id=user.id))
-        if len(checkboxes) > CHECKBOXES_LIMIT:
-            checkboxes = checkboxes[:CHECKBOXES_LIMIT]
-        say(
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"Group {group.handle} has {len(active_users) - 1} active users. Who should I notify?"
-                    }
-                },
-                {
-                    "type": "actions",
-                    "block_id": "checkboxes",
-                    "elements": [
-                        {
-                            "type": "checkboxes",
-                            "options": checkboxes,
-                            "action_id": "checkbox_clicked"
-                        }
-                    ]
-                },
-                {
-                    "type": "actions",
-                    "block_id": "notify_action_block",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Notify"
-                            },
-                            "style": "primary",
-                            "action_id": "notify_button_clicked",
-                        }
-                    ]
-                }
-            ],
-            text='GentleMessenger: choose users to notify',
-            thread_ts=event.get('thread_ts', event['ts']),
-        )
-
-
-@app.action("checkbox_clicked")
-def action_button_click(body, ack, say):
-    ack()
-
-
-@app.action("notify_button_clicked")
-def action_button_click(body, ack, say):
-    ack()
-    selected = body["state"]["values"]["checkboxes"]["checkbox_clicked"]["selected_options"]
-    user_ids = []
-    all_active_selected = False
-    group_handle = None
-    for option in selected:
-        group_handle, user_id = option["value"].split(" ")
-        if user_id == ALL_ACTIVE_USERS:
-            all_active_selected = True
-            group, users = groups_dict.get_group_and_users(group_handle)
-            user_ids = [f'<@{user.id}>' for user in users if user.active]
-            break
-        else:
-            user_ids.append(f'<@{user_id}>')
-    user_ids_str = ', '.join(user_ids)
-
-    app.client.chat_delete(
-        channel=body["container"]["channel_id"],
-        ts=body["message"]["ts"]
-    )
-    if group_handle is not None:
-        msg = f"User <@{body['user']['id']}> asked me to notify "
-        msg += f'all active users of {group_handle}' if all_active_selected else 'those users'
+        msg = f"User <@{requesting_user_id}> asked me to notify "
+        msg += f'all active users of {_groups_str(required_groups)}'
         msg += f": {user_ids_str}"
         say(
             msg,
-            thread_ts=body['container']["thread_ts"]
+            thread_ts=event.get('thread_ts', event['ts']),
         )
 
 
