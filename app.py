@@ -1,37 +1,35 @@
+import datetime
 import os
+import signal
 import socket
+import ssl
 import time
+from functools import partial
 from http.client import HTTPException
 from threading import Thread
 from typing import List
 from urllib.error import URLError
 
+import certifi as certifi
+from ratelimit import sleep_and_retry, limits
 from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk.errors import SlackApiError
+from slack_sdk import WebClient
 
 from utils import GroupsAndUsersThreadSafeDict, User, Group, user_dict_to_user, group_dict_to_group, \
     get_group_name_from_msg
 
-app = App(
-    token=os.environ.get("SLACK_BOT_TOKEN"),
-    signing_secret=os.environ.get("SLACK_SIGNING_SECRET")
-)
 
 BOT_NAME = 'ActiveUsers'
-groups_dict = GroupsAndUsersThreadSafeDict()
-
-# To test locally run this tunnel:
-# ssh -R 3000:localhost:3000 root@reviewraccoon.com
-# but first kill working instance on server
-
-# TODO
-# Store activeness in DB and draw a graph
+MINUTE = 60
 
 
 class RefreshStatusThread(Thread):
-    def __init__(self, groups_users_dict: GroupsAndUsersThreadSafeDict, refresh_seconds=120, sleep_time=3):
+    def __init__(self, slack_client, groups_users_dict: GroupsAndUsersThreadSafeDict, refresh_seconds=120, sleep_time=1):
         super().__init__(name="RefreshStatusThread")
         self._groups_users_dict = groups_users_dict
+        self._client = slack_client
         self._stop_requested = False
         self.last_refresh_time = None
         self.refresh_seconds = refresh_seconds
@@ -41,16 +39,31 @@ class RefreshStatusThread(Thread):
     def request_stop(self):
         self._stop_requested = True
 
+    @sleep_and_retry
+    @limits(calls=20, period=MINUTE)
+    def get_usergroups_list(self):
+        return self._client.usergroups_list(include_users=True)['usergroups']
+
+    @sleep_and_retry
+    @limits(calls=20, period=MINUTE)
+    def get_users_list(self):
+        return self._client.users_list()['members']
+
+    @sleep_and_retry
+    @limits(calls=50, period=MINUTE)
+    def get_user_presence(self, user_id):
+        return self._client.users_getPresence(user=user_id)['presence']
+
     def refresh_groups_and_users_info(self):
         try:
-            groups = app.client.usergroups_list(include_users=True)['usergroups']
-            users = app.client.users_list()['members']
+            groups = self.get_usergroups_list()
+            users = self.get_users_list()
         except (SlackApiError, URLError, socket.timeout, socket.error, HTTPException):
             return
         user_id_to_user = {}
         users_in_groups_ids = set()
         for user_dict in users:
-            if user_dict['is_bot'] and 'real_name' in user_dict and user_dict['real_name'] == 'ActiveUsers':
+            if user_dict['is_bot'] and 'real_name' in user_dict and user_dict['real_name'] == BOT_NAME:
                 if self.bot_user is None:
                     self.bot_user = user_dict_to_user(user_dict)
                     self._groups_users_dict.set_bot_user(self.bot_user)
@@ -65,21 +78,25 @@ class RefreshStatusThread(Thread):
             group = group_dict_to_group(group_dict)
             users_in_groups_ids.update(group.user_ids)
             group_handle_to_group[group.handle] = group
-
         for user_id in users_in_groups_ids:
             try:
-                presence = app.client.users_getPresence(user=user_id)['presence']
+                presence = self.get_user_presence(user_id)
+                if self._stop_requested:
+                    return
             except (SlackApiError, URLError, socket.timeout, socket.error, HTTPException):
                 continue
             if presence == 'active':
                 user = user_id_to_user.get(user_id)
                 if user is None:
-                    continue  # TODO probably we should handle it better
+                    continue  # Unknown user - we will get his info next time
                 user.active = True
         self._groups_users_dict.update_groups_and_users(
             list(group_handle_to_group.values()), list(user_id_to_user.values())
         )
-        print("Refreshing information done")
+        users = user_id_to_user.values()
+        active_names = [u.name for u in users if u.active]
+        active_names.sort()
+        print(f"[{datetime.datetime.now()}] Refreshed active users: {', '.join(active_names)}")
 
     def run(self):
         while not self._stop_requested:
@@ -106,8 +123,7 @@ def _groups_str(names):
     return ', '.join(names[:-1]) + ' and ' + names[-1]
 
 
-@app.event("app_mention")
-def message_hello(event, say):
+def handle_app_mention(groups_dict: GroupsAndUsersThreadSafeDict, event, say):
     if event is None:
         return
     bot_user = groups_dict.bot_user
@@ -161,17 +177,38 @@ def message_hello(event, say):
         )
 
 
+def connect_to_slack():
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"), ssl=ssl_context)
+    bolt_app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+    socket_mode_handler = SocketModeHandler(bolt_app, os.environ.get("SLACK_APP_TOKEN"))
+    socket_mode_handler.connect()
+    return bolt_app, client
+
+
 def main():
-    # Initializes your app with your bot token and signing secret
-    global groups_dict
-    thread = RefreshStatusThread(groups_dict, sleep_time=3)
-    try:
-        thread.start()
-        app.start(port=int(os.environ.get("PORT", 3000)))
-    finally:
-        thread.request_stop()
-        thread.join()
-        pass
+    thread = None
+    while True:
+        try:
+
+            bolt_app, client = connect_to_slack()
+            groups_dict = GroupsAndUsersThreadSafeDict()
+            thread = RefreshStatusThread(client, groups_dict, sleep_time=3)
+            handle_app_mention_with_param = partial(handle_app_mention, groups_dict)
+            bolt_app.event('app_mention')(handle_app_mention_with_param)
+            thread.start()
+            signal.pause()
+        except KeyboardInterrupt:
+            print(f"KeyboardInterrupt detected")
+            break
+        except Exception as e:
+            print(f"Exception: {e}")
+            time.sleep(10)  # to prevent tight error loop
+        finally:
+            print("Stopping thread")
+            if thread is not None and thread.is_alive():
+                thread.request_stop()
+                thread.join()
 
 
 if __name__ == "__main__":
