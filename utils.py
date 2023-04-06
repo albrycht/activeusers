@@ -21,18 +21,18 @@ class User:
 
 
 def user_dict_to_user(user_dict) -> User:
-    id_ = user_dict['id']
-    name = user_dict['name']
-    profile = user_dict['profile']
-    real_name = profile['real_name']
-    avatar = profile['image_48']
+    id_ = user_dict["id"]
+    name = user_dict["name"]
+    profile = user_dict["profile"]
+    real_name = profile["real_name"]
+    avatar = profile["image_48"]
     return User(id_, name, real_name, avatar, active=False)
 
 
 def group_dict_to_group(group_dict) -> Group:
-    id = group_dict['id']
-    handle = group_dict['handle']
-    user_ids = group_dict.get('users', [])
+    id = group_dict["id"]
+    handle = group_dict["handle"]
+    user_ids = group_dict.get("users", [])
     return Group(id, handle, user_ids)
 
 
@@ -100,4 +100,3 @@ class GroupsAndUsersThreadSafeDict:
     def get_groups_handles(self):
         with self._lock:
             return list(self._group_handle_to_group.keys())
-
