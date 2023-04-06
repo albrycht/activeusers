@@ -1,4 +1,5 @@
 import json
+import gzip
 import dataclasses
 import datetime
 from collections import defaultdict
@@ -90,12 +91,12 @@ class ActivityTracker:
 
     def store_activity_in_file(self):
         content = self.get_activity_status_json()
-        with open(ActivityTracker.STORAGE_FILE, "w") as f:
+        with gzip.open(ActivityTracker.STORAGE_FILE, "wt") as f:
             f.write(content)
 
     def read_activity_status_from_file(self, ignore_error=False):
         try:
-            with open(ActivityTracker.STORAGE_FILE, "r") as f:
+            with gzip.open(ActivityTracker.STORAGE_FILE, "rt") as f:
                 content = f.read()
             self.restore_activity_status_from_json(content)
         except OSError:
