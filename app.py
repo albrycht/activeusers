@@ -7,26 +7,22 @@ import time
 from functools import partial
 from http.client import HTTPException
 from threading import Thread
-from typing import List
 from urllib.error import URLError
 
 import certifi as certifi
 from ratelimit import sleep_and_retry, limits
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-from slack_sdk.errors import SlackApiError
 from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
 
 from activity_tracker import ActivityTracker
 from utils import (
     GroupsAndUsersThreadSafeDict,
-    User,
-    Group,
     user_dict_to_user,
     group_dict_to_group,
-    get_group_name_from_msg,
+    get_group_name_and_limit_from_msg, apply_aliases, get_limit,
 )
-
 
 BOT_NAME = "ActiveUsers"
 MINUTE = 60
@@ -145,7 +141,7 @@ class RefreshStatusThread(Thread):
 
 STARFISH_ALIASES = {
     "core": "coreteam",
-    "gui": "guiteam",
+    "gui": "gui_team",
 }
 
 STARFISH_TEAM_ID = "T04QW7B6D"
@@ -168,52 +164,40 @@ def handle_app_mention(groups_dict: GroupsAndUsersThreadSafeDict, event, say):
     team_id = event.get("team")
     text: str = event["text"]
     assert bot_user.id in text
-    required_groups = get_group_name_from_msg(text, bot_user.id)
+    requested_groups_with_limits = get_group_name_and_limit_from_msg(text, bot_user.id)
     if team_id == STARFISH_TEAM_ID:
-        for alias, original in STARFISH_ALIASES.items():
-            if alias in required_groups:
-                required_groups.remove(alias)
-                required_groups.append(original)
+        requested_groups_with_limits = apply_aliases(requested_groups_with_limits, STARFISH_ALIASES)
 
-    error_msg = None
-    groups: List[Group]
-    users: List[User]
-    if not required_groups:
-        error_msg = "You need to type name of the group!"
+    msg_list = []
+    notify_msgs = []
+    requesting_user_id = event["user"]
+    if not requested_groups_with_limits:
+        msg_list.append("You need to type name of the group!")
     else:
         try:
-            groups, users = groups_dict.get_groups_and_users(required_groups)
-            active_users = [user for user in users if user.active]
-            if not active_users:
-                if len(required_groups) == 1:
-                    error_msg = (
-                        f"There are no active users in group {required_groups[0]}."
-                    )
+            group_name_to_group_and_users = groups_dict.get_groups_and_users(requested_groups_with_limits)
+            for group_name, group_and_users in group_name_to_group_and_users.items():
+                group, users_in_group = group_and_users
+                limit = get_limit(requested_groups_with_limits, group_name)
+                active_users = [user for user in users_in_group if user.active and user.id != requesting_user_id]
+                if limit is not None:
+                    active_users = active_users[:limit]
+                if not active_users:
+                    msg_list.append(f"There are no active users in group {group_name}.")
                 else:
-                    error_msg = f"There are no active users in groups {_groups_str(required_groups)}."
+                    user_ids_str = ", ".join([f"<@{user.id}>" for user in active_users])
+                    amount_str = "all" if limit is None else f"{limit}"
+                    notify_msgs.append(f"{amount_str} active users of {group_name}: {user_ids_str}")
         except KeyError as e:
             available_groups = ", ".join(groups_dict.get_groups_handles())
-            error_msg = f"Can't recognise group {e.args[0]}. Available groups: {available_groups}"
+            msg_list.append(f"Can't recognise group {e.args[0]}. Available groups: {available_groups}")
 
-    if error_msg:
-        say(text=error_msg, thread_ts=event.get("thread_ts", event["ts"]))
-
-    else:
-        requesting_user_id = event["user"]
-        user_ids = [
-            f"<@{user.id}>"
-            for user in users
-            if user.active and user.id != requesting_user_id
-        ]
-        user_ids_str = ", ".join(user_ids)
-
-        msg = f"User <@{requesting_user_id}> asked me to notify "
-        msg += f"all active users of {_groups_str(required_groups)}"
-        msg += f": {user_ids_str}"
-        say(
-            msg,
-            thread_ts=event.get("thread_ts", event["ts"]),
-        )
+    msg = "\n".join(msg_list)
+    if notify_msgs:
+        if msg:
+            msg += "\n"
+        msg += f"User <@{requesting_user_id}> asked me to notify " + " and ".join(notify_msgs)
+    say(text=msg, thread_ts=event.get("thread_ts", event["ts"]))
 
 
 def connect_to_slack():
