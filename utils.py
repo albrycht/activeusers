@@ -1,6 +1,6 @@
 import random
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Lock
 from typing import List, Dict, Optional, Tuple
 
@@ -44,26 +44,26 @@ def group_dict_to_group(group_dict) -> Group:
     return Group(id, handle, user_ids)
 
 
-def apply_aliases(groups_with_limits: List[Tuple[str, int | None]], aliases: Dict[str, str]) -> List[Tuple[str, int | None]]:
+def apply_aliases(parsed_groups: List[ParsedGroup], aliases: Dict[str, str]) -> List[ParsedGroup]:
     """
-    >>> apply_aliases([('core', 1), ('coreteam', None), ('gui', 3), ('team4', None)], aliases={'core': 'coreteam', 'gui': 'guiteam'})
-    [('coreteam', 1), ('coreteam', None), ('guiteam', 3), ('team4', None)]
+    >>> apply_aliases([ParsedGroup('core', 1), ParsedGroup('gui', 3, True), ParsedGroup('team4')], aliases={'core': 'coreteam', 'gui': 'guiteam'})
+    [ParsedGroup(group_name='coreteam', limit=1, include_inactive=False), ParsedGroup(group_name='guiteam', limit=3, include_inactive=True), ParsedGroup(group_name='team4', limit=0, include_inactive=False)]
     """
     res = []
-    for group_name, limit in groups_with_limits:
-        if group_name in aliases:
-            res.append((aliases.get(group_name), limit))
+    for group in parsed_groups:
+        if group.group_name in aliases:
+            res.append(replace(group, group_name=aliases[group.group_name]))
         else:
-            res.append((group_name, limit))
+            res.append(group)
     return res
 
 
-def get_limit(group_names_with_limit, group_name) -> int | None:
-    for group, limit in group_names_with_limit:
-        if group == group_name:
-            return limit
-    print(f"ERROR: Did not find group {group_name} in: {group_names_with_limit}")
-    return None
+def get_limit(parsed_groups: List[ParsedGroup], group_name) -> int:
+    for group in parsed_groups:
+        if group.group_name == group_name:
+            return group.limit
+    print(f"ERROR: Did not find group {group_name} in: {parsed_groups}")
+    return 0
 
 
 def get_group_name_and_limit_from_msg(text: str, bot_id: str) -> List[ParsedGroup]:
@@ -117,11 +117,12 @@ class GroupsAndUsersThreadSafeDict:
     def set_bot_user(self, user: User):
         self.bot_user = user
 
-    def get_groups_and_users(self, group_names_with_limit):
+    def get_groups_and_users(self, parsed_groups: List[ParsedGroup]):
         group_name_to_group_and_users = {}
 
         with self._lock:
-            for group_name, _ in group_names_with_limit:
+            for parsed_group in parsed_groups:
+                group_name = parsed_group.group_name
                 user_ids = set()
                 users = []
                 group = self._group_handle_to_group[group_name]

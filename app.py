@@ -22,7 +22,7 @@ from utils import (
     GroupsAndUsersThreadSafeDict,
     user_dict_to_user,
     group_dict_to_group,
-    get_group_name_and_limit_from_msg, apply_aliases, get_limit,
+    get_group_name_and_limit_from_msg, apply_aliases,
 )
 
 BOT_NAME = "ActiveUsers"
@@ -177,18 +177,21 @@ def handle_app_mention(groups_dict: GroupsAndUsersThreadSafeDict, event, say):
     else:
         try:
             group_name_to_group_and_users = groups_dict.get_groups_and_users(requested_groups_with_limits)
-            for group_name, group_and_users in group_name_to_group_and_users.items():
-                group, users_in_group = group_and_users
-                limit = get_limit(requested_groups_with_limits, group_name)
-                active_users = [user for user in users_in_group if user.active and user.id != requesting_user_id]
-                if limit is not None:
-                    random.shuffle(active_users)
-                    active_users = active_users[:limit]
-                if not active_users:
+            for parsed_group in requested_groups_with_limits:
+                group_name = parsed_group.group_name
+                group, users_in_group = group_name_to_group_and_users[group_name]
+                selected_users = [
+                    user for user in users_in_group
+                    if user.id != requesting_user_id and (parsed_group.include_inactive or user.active)
+                ]
+                if parsed_group.limit:
+                    random.shuffle(selected_users)
+                    selected_users = selected_users[:parsed_group.limit]
+                if not selected_users:
                     msg_list.append(f"There are no active users in group {group_name}.")
                 else:
-                    user_ids_str = ", ".join([f"<@{user.id}>" for user in active_users])
-                    amount_str = "all" if limit is None else f"{limit}"
+                    user_ids_str = ", ".join([f"<@{user.id}>" for user in selected_users])
+                    amount_str = "all" if not parsed_group.limit else f"{parsed_group.limit}"
                     notify_msgs.append(f"{amount_str} active users of {group_name}: {user_ids_str}")
         except KeyError as e:
             available_groups = ", ".join(groups_dict.get_groups_handles())
