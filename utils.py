@@ -21,6 +21,13 @@ class User:
     active: bool = False
 
 
+@dataclass
+class ParsedGroup:
+    group_name: str
+    limit: int = 0
+    include_inactive: bool = False
+
+
 def user_dict_to_user(user_dict) -> User:
     id_ = user_dict["id"]
     name = user_dict["name"]
@@ -59,40 +66,34 @@ def get_limit(group_names_with_limit, group_name) -> int | None:
     return None
 
 
-def get_group_name_and_limit_from_msg(text: str, bot_id: str) -> List[Tuple[str, int | None]]:
+def get_group_name_and_limit_from_msg(text: str, bot_id: str) -> List[ParsedGroup]:
     r"""
     >>> get_group_name_and_limit_from_msg("some message <@ABC123> coreteam asdlkj asldaskj", bot_id="ABC123")
-    [('coreteam', None)]
-    >>> get_group_name_and_limit_from_msg("<@ABC123> coreteam asdlkj asldaskj", bot_id="ABC123")
-    [('coreteam', None)]
-    >>> get_group_name_and_limit_from_msg("<@ABC123> coreteam", bot_id="ABC123")
-    [('coreteam', None)]
-    >>> get_group_name_and_limit_from_msg("<@ABC123>     coreteam", bot_id="ABC123")
-    [('coreteam', None)]
-    >>> get_group_name_and_limit_from_msg("<@ABC123>", bot_id="ABC123")
-    []
-    >>> get_group_name_and_limit_from_msg("some msg \nasdlkj<@ABC123> coreteam asdasdasd", bot_id="ABC123")
-    [('coreteam', None)]
-    >>> get_group_name_and_limit_from_msg("<@ABC123> coreteam <@ABC123> guiteam", bot_id="ABC123")
-    [('coreteam', None), ('guiteam', None)]
-    >>> get_group_name_and_limit_from_msg("<@ABC123> coreteam --2", bot_id="ABC123")
-    [('coreteam', 2)]
-    >>> get_group_name_and_limit_from_msg("<@ABC123> coreteam --123", bot_id="ABC123")
-    [('coreteam', 123)]
-    >>> get_group_name_and_limit_from_msg("some message <@ABC123> coreteam  --1 asdlkj asldaskj <@ABC123> team2 asdasd <@ABC123> team3 --3", bot_id="ABC123")
-    [('coreteam', 1), ('team2', None), ('team3', 3)]
+    [ParsedGroup(group_name='coreteam', limit=0, include_inactive=False)]
     """
     id_str = f"<@{bot_id}>"
     assert id_str in text
     groups = []
-    for match in re.finditer(re.escape(id_str) + r"\s+(\w+)(\s+--(\d+))?", text):
+    pattern = re.escape(id_str) + r"\s+(\w+)((?:\s+--\S+)*)"
+    for match in re.finditer(pattern, text):
         group_name = match.group(1)
-        limit_str = match.group(3)
-        if limit_str is not None:
-            limit = int(limit_str)
-        else:
-            limit = None
-        groups.append((group_name, limit))
+        args_str = match.group(2)
+
+        limit = 0
+        include_inactive = False
+
+        args = args_str.split()
+        for arg in args:
+            if arg == "--all":
+                include_inactive = True
+            elif arg.startswith("--") and arg[2:].isdigit():
+                limit = int(arg[2:])
+
+        groups.append(
+            ParsedGroup(
+                group_name=group_name, limit=limit, include_inactive=include_inactive
+            )
+        )
     return groups
 
 

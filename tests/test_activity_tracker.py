@@ -4,6 +4,7 @@ import os
 import pytest
 
 from activity_tracker import ActivityTracker, DateTimeRange
+from utils import ParsedGroup, get_group_name_and_limit_from_msg
 
 
 def remove_file_if_exists(path):
@@ -82,3 +83,23 @@ class TestActivityTracker:
         tracker.read_activity_status_from_file(ignore_error=True)
         assert tracker.active_users == set()
         assert len(tracker.user_to_time_ranges) == 0
+
+
+    def test_get_parsed_group_list(self):
+        bot_id = "ABC123"
+        def test(msg, expected):
+            assert get_group_name_and_limit_from_msg(msg, bot_id=bot_id) == expected
+        test(f"some message <@{bot_id}> coreteam asdlkj asldaskj", [ParsedGroup(group_name='coreteam', limit=0, include_inactive=False)])
+        test(f"<@{bot_id}> coreteam asdlkj asldaskj", [ParsedGroup(group_name='coreteam', limit=0, include_inactive=False)])
+        test(f"<@{bot_id}> coreteam", [ParsedGroup(group_name='coreteam', limit=0, include_inactive=False)])
+        test(f"<@{bot_id}>     coreteam", [ParsedGroup(group_name='coreteam', limit=0, include_inactive=False)])
+        test(f"<@{bot_id}>", [])
+        test(f"some msg \nasdlkj<@{bot_id}> coreteam asdasdasd", [ParsedGroup(group_name='coreteam', limit=0, include_inactive=False)])
+        test(f"<@{bot_id}> coreteam <@{bot_id}> guiteam", [ParsedGroup(group_name='coreteam', limit=0, include_inactive=False), ParsedGroup(group_name='guiteam', limit=0, include_inactive=False)])
+        test(f"<@{bot_id}> coreteam --2", [ParsedGroup(group_name='coreteam', limit=2, include_inactive=False)])
+        test(f"<@{bot_id}> coreteam --123", [ParsedGroup(group_name='coreteam', limit=123, include_inactive=False)])
+        test(f"some message <@{bot_id}> coreteam  --1 asdlkj asldaskj <@{bot_id}> team2 asdasd <@{bot_id}> team3 --3", [ParsedGroup(group_name='coreteam', limit=1, include_inactive=False), ParsedGroup(group_name='team2', limit=0, include_inactive=False), ParsedGroup(group_name='team3', limit=3, include_inactive=False)])
+        test(f"<@{bot_id}> coreteam --all", [ParsedGroup(group_name='coreteam', limit=0, include_inactive=True)])
+        test(f"<@{bot_id}> coreteam --all --2", [ParsedGroup(group_name='coreteam', limit=2, include_inactive=True)])
+        test(f"<@{bot_id}> coreteam --2 --all", [ParsedGroup(group_name='coreteam', limit=2, include_inactive=True)])
+        test(f"asd <@{bot_id}> team1 --all <@{bot_id}> team2 --3 --all <@{bot_id}> team3", [ParsedGroup(group_name='team1', limit=0, include_inactive=True), ParsedGroup(group_name='team2', limit=3, include_inactive=True), ParsedGroup(group_name='team3', limit=0, include_inactive=False)])
