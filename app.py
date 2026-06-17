@@ -1,5 +1,6 @@
 import datetime
 import os
+import random
 import signal
 import socket
 import ssl
@@ -181,6 +182,7 @@ def handle_app_mention(groups_dict: GroupsAndUsersThreadSafeDict, event, say):
                 limit = get_limit(requested_groups_with_limits, group_name)
                 active_users = [user for user in users_in_group if user.active and user.id != requesting_user_id]
                 if limit is not None:
+                    random.shuffle(active_users)
                     active_users = active_users[:limit]
                 if not active_users:
                     msg_list.append(f"There are no active users in group {group_name}.")
