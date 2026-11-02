@@ -5,6 +5,7 @@ import signal
 import socket
 import ssl
 import time
+import traceback
 from functools import partial
 from http.client import HTTPException
 from threading import Thread
@@ -17,7 +18,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from activity_tracker import ActivityTracker
+from activity_tracker import ActivityTracker, utc_now
 from utils import (
     GroupsAndUsersThreadSafeDict,
     user_dict_to_user,
@@ -120,7 +121,7 @@ class RefreshStatusThread(Thread):
         self.activity_tracker.save_activity_status(
             active_users=active_ids,
             inactive_users=inactive_ids,
-            dt=datetime.datetime.now(),
+            dt=utc_now(),
         )
         active_names = [u.id for u in users if u.active]
         active_names.sort()
@@ -135,7 +136,12 @@ class RefreshStatusThread(Thread):
                 self.last_refresh_time is None
                 or now - self.last_refresh_time >= self.refresh_seconds
             ):
-                self.refresh_groups_and_users_info()
+                try:
+                    self.refresh_groups_and_users_info()
+                except Exception:
+                    # One bad sample must not kill this thread. The socket handler
+                    # stays up, so systemd will not restart the process.
+                    traceback.print_exc()
                 self.last_refresh_time = now
             time.sleep(self.sleep_time)
 
