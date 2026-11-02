@@ -15,12 +15,25 @@ class EnhancedJSONEncoder(json.JSONEncoder):
         return super().default(o)
 
 
+def utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
 def ensure_datetime(dt):
+    """Return an aware UTC datetime.
+
+    Timestamps written before this change are naive local wall times. Interpreting
+    those with ``datetime.now()`` makes the clock step backwards on the DST fallback,
+    and the activity thread used to die on ``start <= end``.
+    """
     if isinstance(dt, str):
-        return datetime.datetime.fromisoformat(dt)
+        parsed = datetime.datetime.fromisoformat(dt)
     else:
         assert isinstance(dt, datetime.datetime)
-        return dt
+        parsed = dt
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed.astimezone(datetime.timezone.utc)
 
 
 @dataclasses.dataclass
@@ -48,6 +61,7 @@ class ActivityTracker:
     def save_activity_status(
         self, active_users: Set[str], inactive_users: Set[str], dt: datetime.datetime
     ):
+        dt = ensure_datetime(dt)
         for user in active_users:
             if user in self.active_users:
                 self._prolong_last_activity(user, dt)
@@ -67,7 +81,7 @@ class ActivityTracker:
             {
                 "active_users": list(self.active_users),
                 "user_to_time_ranges": self.user_to_time_ranges,
-                "now": datetime.datetime.now(),
+                "now": utc_now(),
             },
             cls=EnhancedJSONEncoder,
         )
@@ -81,8 +95,8 @@ class ActivityTracker:
             for range_dict in range_list:
                 dt_range = DateTimeRange(**range_dict)
                 self.user_to_time_ranges[user].append(dt_range)
-        then = datetime.datetime.fromisoformat(activity_dict["now"])
-        now = datetime.datetime.now()
+        then = ensure_datetime(activity_dict["now"])
+        now = utc_now()
         if then + datetime.timedelta(minutes=10) < now:
             # long pause - mark all users as offline on then
             self.save_activity_status(
@@ -104,12 +118,17 @@ class ActivityTracker:
                 raise
 
     def _prolong_last_activity(self, user: str, dt: datetime.datetime):
+        dt = ensure_datetime(dt)
         try:
             last_range = self.user_to_time_ranges[user][-1]
-            last_range.end = dt
-            assert last_range.start <= last_range.end
         except IndexError:
             self._add_new_activity(user, dt)
+            return
+        if dt < last_range.start:
+            self._add_new_activity(user, dt)
+            return
+        if dt > last_range.end:
+            last_range.end = dt
 
     def _add_new_activity(self, user: str, dt: datetime.datetime):
         new_range = DateTimeRange(dt, dt)

@@ -78,6 +78,23 @@ class TestActivityTracker:
             dts[1], dts[1]
         )
 
+    def test_clock_step_backwards_keeps_tracking(self):
+        tracker = ActivityTracker()
+        later = datetime.datetime(2026, 11, 1, 5, 59, tzinfo=datetime.timezone.utc)
+        earlier = later - datetime.timedelta(hours=1)
+
+        tracker.save_activity_status(
+            active_users={"ala"}, inactive_users=set(), dt=later
+        )
+        tracker.save_activity_status(
+            active_users={"ala"}, inactive_users=set(), dt=earlier
+        )
+
+        assert "ala" in tracker.active_users
+        ranges = tracker.user_to_time_ranges["ala"]
+        assert ranges[0] == DateTimeRange(later, later)
+        assert ranges[1] == DateTimeRange(earlier, earlier)
+
     def test_load_activity_tracker_from_non_existing_file(self):
         tracker = ActivityTracker()
         tracker.read_activity_status_from_file(ignore_error=True)
